@@ -14,6 +14,7 @@ import StageTag from '@/components/common/StageTag.vue'
 import { useFurnaceStore } from '@/stores/furnaceStore'
 import { usePieceStore } from '@/stores/pieceStore'
 import { CRAFT_OPTIONS, PIECE_STATE_OPTIONS, type Craft, type Piece, type PieceDraft, type PieceState } from '@/types/piece'
+import { GLASS_KIND_OPTIONS, type GlassKind } from '@/types/card'
 import { checkDesign } from '@/utils/thermal'
 
 const router = useRouter()
@@ -30,6 +31,7 @@ const form = reactive<PieceDraft>({
   batchId: '',
   designHeightMm: 200,
   wallThicknessMm: 4,
+  glassKind: '钠钙玻璃',
   craft: '吹制',
   artist: '',
   state: '设计中',
@@ -80,6 +82,7 @@ function openCreate(): void {
     batchId: furnaceStore.batches[0]?.id ?? '',
     designHeightMm: 200,
     wallThicknessMm: 4,
+    glassKind: '钠钙玻璃' as GlassKind,
     craft: '吹制' as Craft,
     artist: '',
     state: '设计中' as PieceState,
@@ -94,6 +97,7 @@ function openEdit(row: Piece): void {
     batchId: row.batchId,
     designHeightMm: row.designHeightMm,
     wallThicknessMm: row.wallThicknessMm,
+    glassKind: row.glassKind,
     craft: row.craft,
     artist: row.artist,
     state: row.state,
@@ -212,9 +216,12 @@ function handleFilterChange(key: string, value: string): void {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="工艺 / 状态" width="230">
+        <el-table-column label="工艺 / 状态" width="250">
           <template #default="{ row }">
-            <StageTag :stage="row.state" :craft="row.craft" size="small" />
+            <div class="cell-stack">
+              <StageTag :stage="row.state" :craft="row.craft" size="small" />
+              <span class="cell-sub">{{ row.glassKind }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="料液批次" min-width="220">
@@ -265,14 +272,21 @@ function handleFilterChange(key: string, value: string): void {
           <el-input v-model="form.name" placeholder="如：晨雾花器" />
         </el-form-item>
         <el-row :gutter="12">
-          <el-col :span="12">
+          <el-col :span="8">
+            <el-form-item label="玻璃种类" prop="glassKind">
+              <el-select v-model="form.glassKind" style="width: 100%">
+                <el-option v-for="item in GLASS_KIND_OPTIONS" :key="item" :value="item" :label="item" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
             <el-form-item label="工艺" prop="craft">
               <el-select v-model="form.craft" style="width: 100%">
                 <el-option v-for="item in CRAFT_OPTIONS" :key="item" :value="item" :label="item" />
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :span="8">
             <el-form-item label="创作者" prop="artist">
               <el-input v-model="form.artist" placeholder="如：林曦" />
             </el-form-item>

@@ -1,11 +1,11 @@
 /**
- * 热工计算工具
- * - 退火曲线段时长换算（升温 / 保温 / 缓冷）
- * - 窑位占用判重（同一窑位时间窗重叠检测）
+ * 热工计算工具（历史默认曲线 / 通用校验）
+ * - 退火曲线段时长换算（升温 / 保温 / 缓冷）：历史默认参数，仅在无工艺卡时兜底展示
  * - 温度单位换算（℃ ↔ ℉）
  * - 工艺温度区间与设计尺寸校验
+ * 注意：窑位时间窗与占用判重、按卡版本的时长换算已迁至 utils/card.ts。
  */
-import type { Anneal, CurveSeg } from '../types/anneal'
+import type { CurveSeg } from '../types/anneal'
 import type { Craft } from '../types/piece'
 
 /** 保留 1 位小数 */
@@ -105,58 +105,6 @@ export function parseAt(value: string): number {
   if (value === '') return Number.NaN
   const stamp = new Date(value).getTime()
   return Number.isNaN(stamp) ? Number.NaN : stamp
-}
-
-/** 时间窗：[入窑, 出炉]；未出炉时以入窑 + 预计时长作为临时出炉时间 */
-export function annealWindow(row: Pick<Anneal, 'inAt' | 'outAt' | 'curveSeg'>, wallThicknessMm: number): [number, number] {
-  const start = parseAt(row.inAt)
-  if (Number.isNaN(start)) return [Number.NaN, Number.NaN]
-  const end = parseAt(row.outAt)
-  if (!Number.isNaN(end) && end > start) return [start, end]
-  return [start, start + segmentHours(row.curveSeg, wallThicknessMm) * 3600 * 1000]
-}
-
-/** 两个时间窗是否重叠 */
-export function windowsOverlap(a: [number, number], b: [number, number]): boolean {
-  if (Number.isNaN(a[0]) || Number.isNaN(b[0])) return false
-  return a[0] < b[1] && b[0] < a[1]
-}
-
-export interface SlotConflict {
-  conflict: boolean
-  /** 冲突的既有退火记录 */
-  withPieceId: string
-  withAnnealId: string
-  message: string
-}
-
-/**
- * 窑位占用判重：同一窑位、时间窗重叠即为冲突。
- * excludeAnnealId 用于编辑场景排除自身。
- */
-export function checkSlotConflict(
-  existing: Anneal[],
-  candidate: Pick<Anneal, 'id' | 'kilnSlot' | 'inAt' | 'outAt' | 'curveSeg' | 'pieceId'>,
-  wallThicknessOf: (pieceId: string) => number,
-  excludeAnnealId = '',
-): SlotConflict {
-  const ownThickness = wallThicknessOf(candidate.pieceId)
-  const ownWindow = annealWindow(candidate, ownThickness)
-
-  for (const row of existing) {
-    if (row.id === excludeAnnealId) continue
-    if (row.kilnSlot !== candidate.kilnSlot) continue
-    const otherWindow = annealWindow(row, wallThicknessOf(row.pieceId))
-    if (windowsOverlap(ownWindow, otherWindow)) {
-      return {
-        conflict: true,
-        withPieceId: row.pieceId,
-        withAnnealId: row.id,
-        message: `窑位 ${candidate.kilnSlot} 在该时间窗内已被占用（${row.inAt} 起的 ${row.curveSeg} 段），请更换窑位或调整时间。`,
-      }
-    }
-  }
-  return { conflict: false, withPieceId: '', withAnnealId: '', message: '' }
 }
 
 /** 生成某台退火窑的窑位列表 */

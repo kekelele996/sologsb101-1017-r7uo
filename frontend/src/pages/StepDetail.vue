@@ -13,14 +13,19 @@ import StageTag from '@/components/common/StageTag.vue'
 import { useStepProgress } from '@/hooks/useStepProgress'
 import { useFurnaceStore } from '@/stores/furnaceStore'
 import { usePieceStore } from '@/stores/pieceStore'
+import { useCardStore } from '@/stores/cardStore'
+import { useAnnealStore } from '@/stores/annealStore'
 import { STEP_NAME_OPTIONS, STEP_STATE_OPTIONS, type Step, type StepDraft, type StepName, type StepState } from '@/types/step'
 import { buildStepCardText, copyText } from '@/utils/export'
-import { CRAFT_TEMP_RANGE, checkStepTemp, formatHours, totalAnnealHours } from '@/utils/thermal'
+import { CRAFT_TEMP_RANGE, checkStepTemp, formatHours } from '@/utils/thermal'
+import { cardTotalHours } from '@/utils/card'
 
 const route = useRoute()
 const router = useRouter()
 const pieceStore = usePieceStore()
 const furnaceStore = useFurnaceStore()
+const cardStore = useCardStore()
+const annealStore = useAnnealStore()
 
 const pieceId = computed<string>(() => String(route.params.id ?? ''))
 const piece = computed(() => pieceStore.pieces.find((row) => row.id === pieceId.value) ?? null)
@@ -73,7 +78,20 @@ const currentStep = computed<Step | null>(() => steps.value.find((row) => row.st
 onMounted(() => {
   void furnaceStore.loadAll()
   void pieceStore.loadAll()
+  void cardStore.loadAll()
+  void annealStore.loadAll()
 })
+
+/** 该作品当前适用的在用退火工艺卡 */
+const pieceCard = computed(() => (piece.value === null ? null : cardStore.matchCard(piece.value)))
+/** 该作品的退火排位（用于工序卡片按卡版本对账展示） */
+const pieceAnneals = computed(() => annealStore.anneals.filter((row) => row.pieceId === pieceId.value))
+/** 按卡版本推算的整段退火时长文本；未配卡时给出提示 */
+const annealHoursText = computed(() =>
+  piece.value === null || pieceCard.value === null
+    ? '尚未匹配到退火工艺卡'
+    : formatHours(cardTotalHours(pieceCard.value, piece.value.wallThicknessMm)),
+)
 
 function openCreate(): void {
   editingId.value = null
@@ -158,7 +176,7 @@ async function handleDrop(targetId: string): Promise<void> {
 
 async function handleCopyCard(): Promise<void> {
   if (piece.value === null) return
-  const text = buildStepCardText(piece.value, batch.value, furnace.value, steps.value, [])
+  const text = buildStepCardText(piece.value, batch.value, furnace.value, steps.value, pieceAnneals.value, cardStore.cards)
   const ok = await copyText(text)
   ElMessage[ok ? 'success' : 'warning'](ok ? '工序卡片已复制到剪贴板' : '当前浏览器不支持剪贴板写入')
 }
@@ -185,7 +203,7 @@ function goAnnealing(): void {
           <StageTag v-if="piece" :stage="piece.state" :craft="piece.craft" />
           <el-tag v-if="furnace" type="info">{{ furnace.code }} · 上限 {{ furnace.maxTempC }} ℃</el-tag>
           <el-tag v-if="batch" type="success">{{ batch.colorCode }} · 余 {{ batch.remainKg }} kg</el-tag>
-          <el-tag v-if="piece" type="warning">理论退火 {{ formatHours(totalAnnealHours(piece.wallThicknessMm)) }}</el-tag>
+          <el-tag v-if="piece" type="warning">理论退火 {{ annealHoursText }}</el-tag>
         </el-space>
       </template>
     </el-page-header>
@@ -236,7 +254,11 @@ function goAnnealing(): void {
         :closable="false"
         class="mb-14"
         title="全部工序已完成，可以进入退火排位"
-        :description="`理论退火时长 ${formatHours(totalAnnealHours(piece?.wallThicknessMm ?? 4))}（升温 / 保温 / 缓冷三段合计）。`"
+        :description="
+          pieceCard === null
+            ? '该作品的玻璃种类与壁厚暂未匹配到在用退火工艺卡，请到退火工艺卡页补卡后再排窑位。'
+            : `按「${pieceCard.name} v${pieceCard.version}」推算，理论退火时长 ${annealHoursText}（升温 / 保温 / 缓冷三段合计）。`
+        "
       />
 
       <el-card shadow="never">

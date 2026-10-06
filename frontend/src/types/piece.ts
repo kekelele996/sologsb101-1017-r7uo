@@ -3,6 +3,8 @@
  * 新建后进入工序编辑；状态由最后一道工序与退火记录共同推进。
  */
 
+import type { GlassKind } from './card'
+
 /** 工艺：吹制 / 铸造 / 热塑 */
 export type Craft = '吹制' | '铸造' | '热塑'
 
@@ -25,6 +27,8 @@ export interface Piece {
   designHeightMm: number
   /** 壁厚（mm） */
   wallThicknessMm: number
+  /** 玻璃种类（决定适用哪一族退火工艺卡） */
+  glassKind: GlassKind
   /** 工艺 */
   craft: Craft
   /** 创作者 */
@@ -42,6 +46,7 @@ export interface PieceDraft {
   batchId: string
   designHeightMm: number
   wallThicknessMm: number
+  glassKind: GlassKind
   craft: Craft
   artist: string
   state: PieceState

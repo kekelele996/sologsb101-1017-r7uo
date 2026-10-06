@@ -5,10 +5,11 @@
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Box, DocumentChecked, Odometer, SetUp, Sunrise } from '@element-plus/icons-vue'
+import { Box, DocumentChecked, Notebook, Odometer, SetUp, Sunrise } from '@element-plus/icons-vue'
 import { useFurnaceStore } from '@/stores/furnaceStore'
 import { usePieceStore } from '@/stores/pieceStore'
 import { useAnnealStore } from '@/stores/annealStore'
+import { useCardStore } from '@/stores/cardStore'
 import { ROUTES } from '@/router'
 
 const route = useRoute()
@@ -16,6 +17,7 @@ const router = useRouter()
 const furnaceStore = useFurnaceStore()
 const pieceStore = usePieceStore()
 const annealStore = useAnnealStore()
+const cardStore = useCardStore()
 
 const navItems = computed(() => {
   const currentPieceId = pieceStore.currentPieceId
@@ -29,6 +31,7 @@ const navItems = computed(() => {
       badge: String(pieceStore.steps.length),
       disabled: currentPieceId === null,
     },
+    { path: ROUTES.cards, label: '退火工艺卡', icon: Notebook, badge: String(cardStore.activeCards.length) },
     { path: ROUTES.annealing, label: '退火编排', icon: Sunrise, badge: String(annealStore.anneals.length) },
     { path: ROUTES.export, label: '检验归档', icon: DocumentChecked, badge: String(pieceStore.counts.inspects ?? 0) },
   ]
@@ -48,6 +51,7 @@ onMounted(() => {
   void furnaceStore.loadAll()
   void pieceStore.loadAll()
   void annealStore.loadAll()
+  void cardStore.loadAll()
 })
 
 function go(path: string): void {
@@ -99,7 +103,7 @@ function go(path: string): void {
       <span>数据仅存于本浏览器（IndexedDB 库名 gbglassblow / localStorage），不上传任何服务器。</span>
       <span>
         窑炉 {{ furnaceStore.furnaces.length }} · 料液 {{ furnaceStore.batches.length }} · 作品
-        {{ pieceStore.pieces.length }} · 工序 {{ pieceStore.steps.length }} · 结构版本 v{{
+        {{ pieceStore.pieces.length }} · 工艺卡 {{ cardStore.cards.length }} · 工序 {{ pieceStore.steps.length }} · 结构版本 v{{
           furnaceStore.counts.schemaVersion ?? '-'
         }}
       </span>

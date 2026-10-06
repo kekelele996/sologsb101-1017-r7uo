@@ -42,7 +42,7 @@ docker compose up -d --build       # 改完代码后重新构建
 | 构建 | Vite 6 | 开发端口与宿主端口一致（22817） |
 | 路由 | Vue Router 4 | `createWebHistory` + 路由懒加载 |
 | 状态管理 | Pinia 2 | setup store，跨页状态集中在 store，页面只读 store |
-| 本地持久化 | Dexie 4（IndexedDB） | 库名 `gbglassblow`，`v1 → v2` 为 Piece 增加 craft 索引并回填默认值 |
+| 本地持久化 | Dexie 4（IndexedDB） | 库名 `gbglassblow`，`v2 → v3` 新增版本化退火工艺卡表并把旧排位按壁厚套当时卡版 |
 | 容器 | node:20-alpine → nginx:alpine | 多阶段构建，`chmod -R a+rX` 规避静态资源 403 |
 
 ---
@@ -85,10 +85,11 @@ sologsb101-1017/
 | 路由 | 页面文件 | 功能 |
 | --- | --- | --- |
 | `/furnaces` | `pages/FurnaceList.vue` | 窑炉与料液台账：新建/编辑/级联删除窑炉、登记料液批次、取料按剩余量扣减、低于阈值高亮提示补料 |
-| `/pieces` | `pages/PieceList.vue` | 作品登记与设计尺寸录入：按工艺与状态筛选、设计尺寸比例校验、显示工序完成度与当前道次 |
+| `/pieces` | `pages/PieceList.vue` | 作品登记与设计尺寸录入（含玻璃种类）：按工艺与状态筛选、设计尺寸比例校验、显示工序完成度与当前道次 |
 | `/pieces/:id/steps` | `pages/StepDetail.vue` | 吹制工序逐道记录：拖拽排序、回填温度/时长/操作人、推进工序状态、前序未完成阻断进入退火排位 |
-| `/annealing` | `pages/AnnealingBoard.vue` | 退火窑位分配与曲线编排：窑位占用表、**窑位冲突时禁用提交**、状态流转、出炉回写作品状态 |
-| `/export` | `pages/ExportView.vue` | 出炉检验登记（不合格生成返工提示）+ JSON 结构版本查看与导入导出 + 窑务 CSV 汇总 |
+| `/cards` | `pages/CardsPage.vue` | 退火工艺卡：按玻璃种类 + 壁厚区间维护三段升降温速率与保温时长；**每调一次存成新版本，旧版自动留档只读** |
+| `/annealing` | `pages/AnnealingBoard.vue` | 退火窑位分配：排窑位先挑一张卡版本，时段按该卡推算；卡升版撞位的排位退回待排、对账不通过待确认、旧排位只读、**窑位冲突时禁用提交** |
+| `/export` | `pages/ExportView.vue` | 出炉检验登记（不合格生成返工提示）+ JSON 结构版本查看与导入导出 + 窑务 CSV 汇总（含卡版本列） |
 
 `/` 重定向到 `/furnaces`，未匹配路径统一回落到 `/furnaces`。
 **层级路由支持直接深链**：把 `http://localhost:22817/pieces/piece-morning-vase/steps` 直接粘贴到地址栏即可打开；
@@ -100,30 +101,39 @@ sologsb101-1017/
 
 * **持久化方案**：IndexedDB，通过 Dexie 封装（`src/utils/db.ts`）。
 * **数据库名**：`gbglassblow`。
-* **数据结构版本**：`DB_SCHEMA_VERSION = 2`
+* **数据结构版本**：`DB_SCHEMA_VERSION = 3`
   * `db.version(1)`：建立全部表与 `[pieceId+seq]` 复合索引；
   * `db.version(2)`：**为 `Piece` 增加 `craft` 索引并回填默认值**，同时补齐其余索引与字段：
     * `.upgrade()` 中逐行回填 `revision` / `createdAt` / `updatedAt`；
     * `pieces.craft` 缺失时回填 `吹制`，`pieces.state` 缺失时回填 `设计中`；
     * `steps.state` 缺失时按历史记录视为 `已完成`，避免升级后被误判为待办；
     * `anneals` 补齐 `outAt` 与 `curveSeg`，`inspects` 补齐 `defectNote`。
+  * `db.version(3)`：**退火工艺卡版本化落地**：
+    * 新增 `cards` 表（索引 `familyKey` / `[familyKey+status]` / `glassKind` / `status` / `version`），
+      升级时写入 4 张「当时那版」默认卡（钠钙薄/常规/厚三档 + 钾铅常规档）；
+    * `pieces` 增 `glassKind`，旧作品按料液配方含「钾/铅」字样推断为钾铅玻璃，其余按钠钙玻璃；
+    * `anneals` 增 `cardVersionId` / `scheduleStatus` / `scheduleReason` / `locked`：
+      旧排位**按作品玻璃种类 + 壁厚套当时在用卡版**，套得上的记为「已排」；
+      **套不上的留成只读（`locked=true`、排位状态「待确认」）**，只展示、不占窑位、不能推进或编辑。
 * **表结构**：
 
   | 表 | 主键 | 主要索引 |
   | --- | --- | --- |
   | `furnaces` | id | code, type, state, fuelType, createdAt, updatedAt |
   | `batches` | id | furnaceId, colorCode, meltDate, remainKg |
-  | `pieces` | id | batchId, state, artist, **craft**, name |
+  | `pieces` | id | batchId, state, artist, craft, name, **glassKind** |
   | `steps` | id | pieceId, **[pieceId+seq]**, seq, state, name |
-  | `anneals` | id | pieceId, kilnSlot, state, inAt, curveSeg |
+  | `anneals` | id | pieceId, kilnSlot, state, inAt, curveSeg, **cardVersionId, scheduleStatus** |
   | `inspects` | id | pieceId, date, result, inspector |
+  | `cards` | id | familyKey, **[familyKey+status]**, glassKind, status, version |
 
 * **首屏演示数据**：`initDatabase()` 在打开数据库后检测 `furnaces` 表是否为空，为空则调用 `utils/seed.ts` 播种，
-  幂等且只执行一次。播种链路为 **窑炉 → 料液批次 → 作品 → 吹制工序 → 退火 → 出炉检验** 三层互相引用：
+  幂等且只执行一次。播种链路为 **工艺卡 → 窑炉 → 料液批次 → 作品 → 吹制工序 → 退火 → 出炉检验** 多层互相引用：
+  * 4 张在用退火工艺卡（钠钙玻璃 0–4 / 4–8 / ≥8 mm 三档 + 钾铅玻璃 0–5 mm 一档）；
   * 3 台窑炉（KILN-01 熔化炉 / KILN-02 坩埚炉 / AN-01 退火窑）；
   * 4 批料液（含 `A-207` 剩余 42 kg，故意低于 60 kg 补料阈值用于验证高亮与提醒）；
-  * 5 件作品（覆盖四种状态与三种工艺）、17 道吹制工序（每件 2–5 道，seq 连续）；
-  * 4 条退火记录（窑位 A1/A2/A3/B1 互不冲突，覆盖已出炉 / 退火中 / 待入窑）；
+  * 5 件作品（覆盖四种状态、三种工艺与两种玻璃种类）、17 道吹制工序（每件 2–5 道，seq 连续）；
+  * 4 条退火记录（窑位 A1/A2/A3/B1 互不冲突，覆盖已出炉 / 退火中 / 待入窑，全部挂在用卡版本）；
   * 3 条出炉检验（含一条「裂纹」不合格 + 一条返工后复检合格）。
   * 固定 id 如 `piece-morning-vase`、`piece-frost-bottle` 可直接用于深链验证。
 * **其他本地数据**：`localStorage` 仅保存「最近选中的作品 id」这一界面偏好，不存业务数据。
@@ -149,19 +159,27 @@ npm run preview      # 预览 dist 产物
 
 ---
 
-## 七、核心业务规则（`src/utils/thermal.ts`）
+## 七、核心业务规则（`src/utils/card.ts` + `src/utils/thermal.ts`）
 
-* **退火曲线时长换算**
-  * 升温：20 ℃ → 560 ℃，按 120 ℃/h；
-  * 保温：560 ℃ 恒温，每 5 mm 壁厚保温 1.2 小时（壁厚越大保温越久）；
-  * 缓冷：560 ℃ → 60 ℃，按 40 ℃/h。
-  三段合计即该作品的**理论退火时长**，壁厚直接决定总时长。
-* **窑位占用判重**：同一窑位的时间窗 `[入窑, 出炉]` 重叠即判定冲突；未出炉时以「入窑 + 该曲线段理论时长」作为临时出炉时间参与判重。
-  **冲突时提交按钮禁用**并给出冲突的既有记录说明。
+* **退火工艺卡版本化（`cards` 表）**
+  * 一张卡 = **玻璃种类 + 壁厚区间** 唯一确定一个卡族，定义三段参数：升温速率、保温退火点与保温时长（h/5mm）、缓冷速率；
+  * 「调参升版」永远写入新版本：旧版置 `archived` 留档只读、新版为 `active`，版本号递增且记录 `supersedesId`；
+  * 同一玻璃种类的壁厚区间不允许与其他在用卡族重叠。
+* **排位按卡版本推算时段**
+  * 每条退火排位记 `cardVersionId`：升温 / 缓冷时长 = 温差 ÷ 速率；保温时长 = 壁厚 ÷ 5 × 保温基准；
+    未出炉排位的预计出炉时间 = 入窑时间 + 三段合计，**以当初所选卡版本为唯一依据**。
+  * **卡升版联动**：尚未进窑（待入窑）的排位自动改挂新版并重算；与他人窑位时间窗撞车的排位
+    **退回「待排」**（不占窑位、清空预计出炉时间），排产员改窑位 / 改时段后在退火页重新提交；
+    **已进窑（退火中 / 已出炉）的排位照当初那版烧完，绝不改挂**。
+* **按卡版本对账**：排位引用的卡版本找不到（缺卡 / 导入旧档缺卡）时置「待确认」搁置，
+  人工改挂有效卡并复核窑位后恢复「已排」；**v3 升级时套不上当时卡版的旧排位留成只读**，只展示不占窑位。
+* **窑位占用判重**：同一窑位的时间窗 `[入窑, 出炉]` 重叠即冲突；待排 / 待确认 / 只读排位不占窑位。
+  **冲突时提交按钮禁用**并给出冲突的既有记录与对方卡版本说明。
+* **历史默认曲线**：`thermal.ts` 中的 120 ℃/h 升温、1.2h/5mm 保温、40 ℃/h 缓冷仅作为无卡时的兜底展示常量。
 * **温度单位换算**：℃ ↔ ℉（`cToF` / `fToC`）。
 * **工序温度校验**：不得超过所选窑炉的 `maxTempC`，且应落在工艺适宜区间（吹制 900–1200 ℃ / 铸造 800–1150 ℃ / 热塑 700–1000 ℃）附近。
 * **设计尺寸校验**：壁厚需 ≥ 1.5 mm 且小于设计高度的 1/8，否则给出成型与退火难度提示。
-* **前序阻断**：任一前序工序未推进到「已完成」，`/pieces/:id/steps` 的「进入退火排位」会给出明确阻断原因。
+* **前序阻断**：任一前序工序未推进到「已完成」，`/pieces/:id/steps` 的「进入退火排位」会给出明确阻断原因；作品壁厚 / 玻璃种类匹配不到在用卡时同样提示先补卡。
 * **状态回写**：退火状态推进到「已出炉」即把作品状态回写为「已退火」；登记出炉检验后回写为「已检验」；
   判定不合格时生成返工提示，**原始工序记录完整保留**。
 * **料液扣减**：取料按剩余量扣减（不足时扣到 0），剩余量低于 60 kg 时列表行高亮并在顶部汇总提醒。

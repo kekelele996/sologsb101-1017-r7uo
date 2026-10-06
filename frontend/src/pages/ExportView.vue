@@ -12,6 +12,7 @@ import FilterBar from '@/components/common/FilterBar.vue'
 import StatBadge from '@/components/common/StatBadge.vue'
 import StageTag from '@/components/common/StageTag.vue'
 import { useAnnealStore } from '@/stores/annealStore'
+import { useCardStore } from '@/stores/cardStore'
 import { useFurnaceStore } from '@/stores/furnaceStore'
 import { usePieceStore } from '@/stores/pieceStore'
 import { DB_NAME, DB_SCHEMA_VERSION, db, exportSnapshot, importSnapshot, resetDatabase } from '@/utils/db'
@@ -24,6 +25,7 @@ const router = useRouter()
 const pieceStore = usePieceStore()
 const annealStore = useAnnealStore()
 const furnaceStore = useFurnaceStore()
+const cardStore = useCardStore()
 
 const { rows, loading, create, update, remove } = useIdbTable<Inspect>(db.inspects, { sortByUpdatedAt: false })
 
@@ -88,6 +90,7 @@ onMounted(() => {
   void pieceStore.loadAll()
   void annealStore.loadAll()
   void furnaceStore.loadAll()
+  void cardStore.loadAll()
 })
 
 function openCreate(): void {
@@ -165,6 +168,7 @@ function handleExportCsv(): void {
     pieceStore.steps,
     annealStore.anneals,
     rows.value,
+    cardStore.cards,
   )
   ElMessage.success(`已导出窑务排产汇总 ${filename}`)
 }
@@ -179,7 +183,7 @@ async function handleImport(uploadFile: UploadFile): Promise<void> {
     return
   }
   await importSnapshot(result.snapshot)
-  await Promise.all([pieceStore.loadAll(), annealStore.loadAll(), furnaceStore.loadAll()])
+  await Promise.all([pieceStore.loadAll(), annealStore.loadAll(), furnaceStore.loadAll(), cardStore.loadAll()])
   ElMessage.success(`导入成功：${result.message}`)
 }
 
@@ -191,7 +195,7 @@ function handleReset(): void {
   )
     .then(async () => {
       await resetDatabase()
-      await Promise.all([pieceStore.loadAll(), annealStore.loadAll(), furnaceStore.loadAll()])
+      await Promise.all([pieceStore.loadAll(), annealStore.loadAll(), furnaceStore.loadAll(), cardStore.loadAll()])
       ElMessage.success('已重置为演示数据')
     })
     .catch(() => undefined)
@@ -221,7 +225,7 @@ const defectRows = computed<Inspect[]>(() => rows.value.filter((row) => row.resu
         :suffix="`· ${DB_NAME}`"
         tone="info"
         icon="Histogram"
-        hint="IndexedDB 库名与结构版本；v2 为 Piece 增加 craft 索引并回填默认值"
+        hint="IndexedDB 库名与结构版本；v3 新增版本化退火工艺卡，旧排位按壁厚套当时卡版，套不上留只读"
       />
     </div>
 

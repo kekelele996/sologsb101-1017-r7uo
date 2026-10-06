@@ -10,8 +10,10 @@ import type { Piece } from '../types/piece'
 import type { Step } from '../types/step'
 import type { Anneal } from '../types/anneal'
 import type { Inspect } from '../types/inspect'
+import type { AnnealCard } from '../types/card'
 import { stampSuffix } from './id'
-import { formatHours, isLowRemain, segmentHours, totalAnnealHours } from './thermal'
+import { formatHours, isLowRemain } from './thermal'
+import { cardPhaseHours, cardTotalHours, cardVersionLabel, findCardVersion } from './card'
 
 /** 触发浏览器下载 */
 export function download(filename: string, content: string, mime: string): void {
@@ -73,7 +75,10 @@ export function parseSnapshot(text: string): SnapshotParseResult {
       return { ok: false, message: `存档缺少 ${String(key)} 数组。`, snapshot: null }
     }
   }
-  return { ok: true, message: '存档校验通过。', snapshot: data as DatabaseSnapshot }
+  // cards 为 v3 新增：老快照没有该数组时按空数组处理，导入侧会补默认卡并回填旧排位
+  const snapshot = data as DatabaseSnapshot
+  if (!Array.isArray(snapshot.cards)) snapshot.cards = []
+  return { ok: true, message: '存档校验通过。', snapshot }
 }
 
 /** 生成窑务排产汇总 CSV（一件作品一行） */
@@ -84,9 +89,11 @@ export function buildScheduleCsv(
   steps: Step[],
   anneals: Anneal[],
   inspects: Inspect[],
+  cards: AnnealCard[] = [],
 ): string {
   const header = [
     '作品名',
+    '玻璃种类',
     '工艺',
     '创作者',
     '状态',
@@ -100,6 +107,8 @@ export function buildScheduleCsv(
     '退火记录数',
     '退火窑位',
     '退火状态',
+    '排位状态',
+    '工艺卡版本',
     '理论退火时长',
     '检验次数',
     '最近检验结果',
@@ -113,9 +122,11 @@ export function buildScheduleCsv(
     const latestAnneal = pieceAnneals.length > 0 ? pieceAnneals[pieceAnneals.length - 1] : null
     const pieceInspects = inspects.filter((row) => row.pieceId === piece.id).sort((a, b) => a.date.localeCompare(b.date))
     const latestInspect = pieceInspects.length > 0 ? pieceInspects[pieceInspects.length - 1] : null
+    const card = latestAnneal === null ? null : findCardVersion(cards, latestAnneal.cardVersionId)
     lines.push(
       [
         piece.name,
+        piece.glassKind,
         piece.craft,
         piece.artist,
         piece.state,
@@ -129,7 +140,9 @@ export function buildScheduleCsv(
         pieceAnneals.length,
         latestAnneal?.kilnSlot ?? '—',
         latestAnneal?.state ?? '—',
-        formatHours(totalAnnealHours(piece.wallThicknessMm)),
+        latestAnneal === null ? '—' : latestAnneal.locked ? '只读旧排位' : latestAnneal.scheduleStatus,
+        card === null ? '卡缺失/未挂卡' : cardVersionLabel(card),
+        card === null ? '—' : formatHours(cardTotalHours(card, piece.wallThicknessMm)),
         pieceInspects.length,
         latestInspect?.result ?? '—',
       ]
@@ -148,9 +161,10 @@ export function exportScheduleCsvFile(
   steps: Step[],
   anneals: Anneal[],
   inspects: Inspect[],
+  cards: AnnealCard[] = [],
 ): string {
   const filename = `玻璃窑务排产汇总-${stampSuffix()}.csv`
-  download(filename, buildScheduleCsv(furnaces, batches, pieces, steps, anneals, inspects), 'text/csv;charset=utf-8')
+  download(filename, buildScheduleCsv(furnaces, batches, pieces, steps, anneals, inspects, cards), 'text/csv;charset=utf-8')
   return filename
 }
 
@@ -174,18 +188,26 @@ export function buildStepCardText(
   furnace: Furnace | undefined,
   steps: Step[],
   anneals: Anneal[],
+  cards: AnnealCard[] = [],
 ): string {
   const lines: string[] = []
-  lines.push(`【工序卡片】${piece.name}（${piece.craft} · ${piece.artist} · ${piece.state}）`)
+  lines.push(`【工序卡片】${piece.name}（${piece.glassKind} · ${piece.craft} · ${piece.artist} · ${piece.state}）`)
   lines.push(`设计尺寸：高 ${piece.designHeightMm} mm / 壁厚 ${piece.wallThicknessMm} mm`)
   lines.push(`料液：${batch === undefined ? '未关联' : `${batch.colorCode}（${batch.recipe}）`} · 窑炉 ${furnace?.code ?? '—'}`)
-  lines.push(
-    `理论退火时长：${formatHours(totalAnnealHours(piece.wallThicknessMm))}（升温 ${formatHours(
-      segmentHours('升温', piece.wallThicknessMm),
-    )} / 保温 ${formatHours(segmentHours('保温', piece.wallThicknessMm))} / 缓冷 ${formatHours(
-      segmentHours('缓冷', piece.wallThicknessMm),
-    )}）`,
-  )
+  // 按作品最新排位所挂卡版本展示理论退火时长；没有卡时提示先挑卡
+  const latestAnneal = anneals.slice(-1)[0]
+  const card = latestAnneal === undefined ? null : findCardVersion(cards, latestAnneal.cardVersionId)
+  if (card === null) {
+    lines.push('理论退火时长：未挂退火工艺卡（排窑位时挑卡后按卡版本推算）')
+  } else {
+    lines.push(
+      `理论退火时长：${formatHours(cardTotalHours(card, piece.wallThicknessMm))}（${cardVersionLabel(card)}：升温 ${formatHours(
+        cardPhaseHours(card, '升温', piece.wallThicknessMm),
+      )} / 保温 ${formatHours(cardPhaseHours(card, '保温', piece.wallThicknessMm))} / 缓冷 ${formatHours(
+        cardPhaseHours(card, '缓冷', piece.wallThicknessMm),
+      )}）`,
+    )
+  }
   lines.push('工序：')
   steps
     .slice()
@@ -200,7 +222,12 @@ export function buildStepCardText(
   if (anneals.length > 0) {
     lines.push('退火：')
     anneals.forEach((row) => {
-      lines.push(`  ${row.kilnSlot} · ${row.curveSeg} · ${row.inAt} → ${row.outAt || '未出炉'} · ${row.state}`)
+      const rowCard = findCardVersion(cards, row.cardVersionId)
+      lines.push(
+        `  ${row.kilnSlot} · ${row.curveSeg} · ${row.inAt} → ${row.outAt || '未出炉'} · ${row.state} · ${
+          row.locked ? '只读旧排位' : row.scheduleStatus
+        } · ${rowCard === null ? '卡缺失' : cardVersionLabel(rowCard)}`,
+      )
     })
   }
   return lines.join('\n')
