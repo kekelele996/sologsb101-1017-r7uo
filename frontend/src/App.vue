@@ -5,10 +5,11 @@
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Box, DocumentChecked, Odometer, SetUp, Sunrise } from '@element-plus/icons-vue'
+import { Box, DocumentChecked, Notebook, Odometer, SetUp, Sunrise } from '@element-plus/icons-vue'
 import { useFurnaceStore } from '@/stores/furnaceStore'
 import { usePieceStore } from '@/stores/pieceStore'
 import { useAnnealStore } from '@/stores/annealStore'
+import { useCardStore } from '@/stores/cardStore'
 import { ROUTES } from '@/router'
 
 const route = useRoute()
@@ -16,6 +17,7 @@ const router = useRouter()
 const furnaceStore = useFurnaceStore()
 const pieceStore = usePieceStore()
 const annealStore = useAnnealStore()
+const cardStore = useCardStore()
 
 const navItems = computed(() => {
   const currentPieceId = pieceStore.currentPieceId
@@ -29,7 +31,8 @@ const navItems = computed(() => {
       badge: String(pieceStore.steps.length),
       disabled: currentPieceId === null,
     },
-    { path: ROUTES.annealing, label: '退火编排', icon: Sunrise, badge: String(annealStore.anneals.length) },
+    { path: ROUTES.cards, label: '退火工艺卡', icon: Notebook, badge: String(cardStore.stats.groups) },
+    { path: ROUTES.annealing, label: '退火排产', icon: Sunrise, badge: String(annealStore.anneals.length) },
     { path: ROUTES.export, label: '检验归档', icon: DocumentChecked, badge: String(pieceStore.counts.inspects ?? 0) },
   ]
 })
@@ -48,6 +51,7 @@ onMounted(() => {
   void furnaceStore.loadAll()
   void pieceStore.loadAll()
   void annealStore.loadAll()
+  void cardStore.loadAll()
 })
 
 function go(path: string): void {

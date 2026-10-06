@@ -1,6 +1,6 @@
 /**
  * 演示数据播种（幂等）
- * 父 → 子 → 孙三层链路：窑炉 → 料液批次 → 作品 → 吹制工序 → 退火 → 出炉检验
+ * 父 → 子 → 孙链路：工艺卡 → 窑炉 → 料液批次 → 作品 → 吹制工序 → 退火 → 出炉检验
  * 所有 id 固定，保证 /pieces/:id/steps 深链一定命中真实作品与工序。
  */
 import { db, ROW_REVISION } from './db'
@@ -10,6 +10,8 @@ import type { Piece } from '../types/piece'
 import type { Step } from '../types/step'
 import type { Anneal } from '../types/anneal'
 import type { Inspect } from '../types/inspect'
+import type { AnnealCard } from '../types/card'
+import { buildDefaultCards, defaultCardId, DEFAULT_CARD_SPECS } from './defaultCards'
 
 const SEED_TIME = '2026-09-01T02:00:00.000Z'
 
@@ -29,6 +31,13 @@ export const SEED_IDS = {
   pieceCup: 'piece-red-cup',
 } as const
 
+/** 按 spec.key 取默认卡行 id */
+function cardIdByKey(key: string): string {
+  const spec = DEFAULT_CARD_SPECS.find((item) => item.key === key)
+  if (spec === undefined) throw new Error(`默认卡缺失：${key}`)
+  return defaultCardId(spec)
+}
+
 function wrap<T>(row: Omit<T, 'createdAt' | 'updatedAt' | 'revision'>): T {
   return { ...row, createdAt: SEED_TIME, updatedAt: SEED_TIME, revision: ROW_REVISION } as T
 }
@@ -36,6 +45,9 @@ function wrap<T>(row: Omit<T, 'createdAt' | 'updatedAt' | 'revision'>): T {
 export async function seedDatabase(): Promise<void> {
   const exists = await db.furnaces.count()
   if (exists > 0) return
+
+  // ---------------- 退火工艺卡（三种料性 × 薄壁/厚壁，共 6 张 v1） ----------------
+  const annealCards: AnnealCard[] = buildDefaultCards(SEED_TIME, ROW_REVISION)
 
   // ---------------- 窑炉（2 台熔化/坩埚炉 + 1 台退火窑） ----------------
   const furnaces: Furnace[] = [
@@ -46,10 +58,10 @@ export async function seedDatabase(): Promise<void> {
 
   // ---------------- 料液批次（每窑 2 批，含一批低于补料阈值） ----------------
   const batches: GlassBatch[] = [
-    wrap<GlassBatch>({ id: SEED_IDS.batchAmber, furnaceId: SEED_IDS.furnaceMelt, colorCode: 'G-101', recipe: '钠钙玻璃基础料 + 氧化钴 0.3%', meltDate: '2026-09-12', tempC: 1180, remainKg: 268 }),
-    wrap<GlassBatch>({ id: SEED_IDS.batchIron, furnaceId: SEED_IDS.furnaceMelt, colorCode: 'A-207', recipe: '钠钙玻璃基础料 + 氧化铁 1.2%', meltDate: '2026-08-28', tempC: 1165, remainKg: 42 }),
-    wrap<GlassBatch>({ id: SEED_IDS.batchCopper, furnaceId: SEED_IDS.furnaceCrucible, colorCode: 'C-330', recipe: '钾铅玻璃 + 氧化铜 0.8%', meltDate: '2026-09-18', tempC: 1120, remainKg: 156 }),
-    wrap<GlassBatch>({ id: SEED_IDS.batchClear, furnaceId: SEED_IDS.furnaceCrucible, colorCode: 'T-045', recipe: '高透钠钙玻璃（无着色剂）', meltDate: '2026-09-05', tempC: 1170, remainKg: 88 }),
+    wrap<GlassBatch>({ id: SEED_IDS.batchAmber, furnaceId: SEED_IDS.furnaceMelt, colorCode: 'G-101', recipe: '钠钙玻璃基础料 + 氧化钴 0.3%', glassType: '钠钙玻璃', meltDate: '2026-09-12', tempC: 1180, remainKg: 268 }),
+    wrap<GlassBatch>({ id: SEED_IDS.batchIron, furnaceId: SEED_IDS.furnaceMelt, colorCode: 'A-207', recipe: '钠钙玻璃基础料 + 氧化铁 1.2%', glassType: '钠钙玻璃', meltDate: '2026-08-28', tempC: 1165, remainKg: 42 }),
+    wrap<GlassBatch>({ id: SEED_IDS.batchCopper, furnaceId: SEED_IDS.furnaceCrucible, colorCode: 'C-330', recipe: '钾铅玻璃 + 氧化铜 0.8%', glassType: '钾铅玻璃', meltDate: '2026-09-18', tempC: 1120, remainKg: 156 }),
+    wrap<GlassBatch>({ id: SEED_IDS.batchClear, furnaceId: SEED_IDS.furnaceCrucible, colorCode: 'T-045', recipe: '高透钠钙玻璃（无着色剂）', glassType: '钠钙玻璃', meltDate: '2026-09-05', tempC: 1170, remainKg: 88 }),
   ]
 
   // ---------------- 作品（5 件，覆盖四种状态与三种工艺） ----------------
@@ -82,12 +94,33 @@ export async function seedDatabase(): Promise<void> {
     wrap<Step>({ id: 'step-c3', pieceId: SEED_IDS.pieceCup, seq: 3, name: '塑形', tempC: 1000, durationMin: 8, operator: '林曦', remark: '接杯柄并回火', state: '已完成' }),
   ]
 
-  // ---------------- 退火（4 条，窑位互不冲突；含已出炉 / 退火中 / 待入窑） ----------------
+  // ---------------- 退火（4 条，绑定对应玻璃种类/壁厚的卡版本） ----------------
+  // 叠翠碗 6mm 钾铅玻璃厚壁；霜白瓶 3.2mm 钠钙薄壁；赤霞杯 3.5mm 钠钙薄壁；晨雾花器 4.5mm 钠钙薄壁
   const anneals: Anneal[] = [
-    wrap<Anneal>({ id: 'anneal-g1', pieceId: SEED_IDS.pieceGreen, kilnSlot: 'AN-01-A1', curveSeg: '缓冷', inAt: '2026-09-20T09:00', outAt: '2026-09-21T09:00', state: '已出炉' }),
-    wrap<Anneal>({ id: 'anneal-b1', pieceId: SEED_IDS.pieceBottle, kilnSlot: 'AN-01-A2', curveSeg: '缓冷', inAt: '2026-09-26T08:00', outAt: '2026-09-27T08:00', state: '已出炉' }),
-    wrap<Anneal>({ id: 'anneal-c1', pieceId: SEED_IDS.pieceCup, kilnSlot: 'AN-01-A3', curveSeg: '升温', inAt: '2026-09-29T14:00', outAt: '', state: '退火中' }),
-    wrap<Anneal>({ id: 'anneal-m1', pieceId: SEED_IDS.pieceMorning, kilnSlot: 'AN-01-B1', curveSeg: '保温', inAt: '2026-10-02T10:00', outAt: '', state: '待入窑' }),
+    wrap<Anneal>({
+      id: 'anneal-g1', pieceId: SEED_IDS.pieceGreen, kilnSlot: 'AN-01-A1',
+      cardVersionId: cardIdByKey('钾铅玻璃-thick'), cardKey: '钾铅玻璃::5.01-100mm', cardVersion: 1,
+      curveSeg: '缓冷', inAt: '2026-09-20T09:00', outAt: '2026-09-21T09:00',
+      state: '已出炉', scheduleState: '已进窑', legacy: false,
+    }),
+    wrap<Anneal>({
+      id: 'anneal-b1', pieceId: SEED_IDS.pieceBottle, kilnSlot: 'AN-01-A2',
+      cardVersionId: cardIdByKey('钠钙玻璃-thin'), cardKey: '钠钙玻璃::0-5mm', cardVersion: 1,
+      curveSeg: '缓冷', inAt: '2026-09-26T08:00', outAt: '2026-09-27T08:00',
+      state: '已出炉', scheduleState: '已进窑', legacy: false,
+    }),
+    wrap<Anneal>({
+      id: 'anneal-c1', pieceId: SEED_IDS.pieceCup, kilnSlot: 'AN-01-A3',
+      cardVersionId: cardIdByKey('钠钙玻璃-thin'), cardKey: '钠钙玻璃::0-5mm', cardVersion: 1,
+      curveSeg: '升温', inAt: '2026-09-29T14:00', outAt: '',
+      state: '退火中', scheduleState: '已进窑', legacy: false,
+    }),
+    wrap<Anneal>({
+      id: 'anneal-m1', pieceId: SEED_IDS.pieceMorning, kilnSlot: 'AN-01-B1',
+      cardVersionId: cardIdByKey('钠钙玻璃-thin'), cardKey: '钠钙玻璃::0-5mm', cardVersion: 1,
+      curveSeg: '保温', inAt: '2026-10-02T10:00', outAt: '',
+      state: '待入窑', scheduleState: '已排', legacy: false,
+    }),
   ]
 
   // ---------------- 出炉检验（2–3 条，含不合格与返工后复检合格） ----------------
@@ -97,12 +130,17 @@ export async function seedDatabase(): Promise<void> {
     wrap<Inspect>({ id: 'inspect-g2', pieceId: SEED_IDS.pieceGreen, result: '合格', defectNote: '回炉修补后复检合格。', inspector: '吴岚', date: '2026-09-25' }),
   ]
 
-  await db.transaction('rw', [db.furnaces, db.batches, db.pieces, db.steps, db.anneals, db.inspects], async () => {
-    await db.furnaces.bulkPut(furnaces)
-    await db.batches.bulkPut(batches)
-    await db.pieces.bulkPut(pieces)
-    await db.steps.bulkPut(steps)
-    await db.anneals.bulkPut(anneals)
-    await db.inspects.bulkPut(inspects)
-  })
+  await db.transaction(
+    'rw',
+    [db.furnaces, db.batches, db.pieces, db.steps, db.anneals, db.inspects, db.annealCards],
+    async () => {
+      await db.annealCards.bulkPut(annealCards)
+      await db.furnaces.bulkPut(furnaces)
+      await db.batches.bulkPut(batches)
+      await db.pieces.bulkPut(pieces)
+      await db.steps.bulkPut(steps)
+      await db.anneals.bulkPut(anneals)
+      await db.inspects.bulkPut(inspects)
+    },
+  )
 }

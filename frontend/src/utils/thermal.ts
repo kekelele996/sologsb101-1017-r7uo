@@ -1,11 +1,16 @@
 /**
  * 热工计算工具
- * - 退火曲线段时长换算（升温 / 保温 / 缓冷）
+ * - 退火工艺卡三段时长换算（升温 / 保温 / 缓冷），全部以卡版本参数为准
+ * - 按玻璃种类 + 壁厚挑卡、按卡版本对账
  * - 窑位占用判重（同一窑位时间窗重叠检测）
  * - 温度单位换算（℃ ↔ ℉）
  * - 工艺温度区间与设计尺寸校验
+ *
+ * 老库（无卡版本）记录回退到 LEGACY_CURVE 口径（即旧版写死参数），
+ * 保证升级前已排的排位时长口径不变。
  */
-import type { Anneal, CurveSeg } from '../types/anneal'
+import type { Anneal } from '../types/anneal'
+import type { AnnealCard, CardCurve, CardSegment, CurveSeg, GlassType } from '../types/card'
 import type { Craft } from '../types/piece'
 
 /** 保留 1 位小数 */
@@ -28,52 +33,53 @@ export function fToC(f: number): number {
   return round1(((f - 32) * 5) / 9)
 }
 
-/** 退火曲线段参数：起止温度与速率 */
-export interface CurveSegment {
-  seg: CurveSeg
-  startC: number
-  endC: number
-  /** 升降温速率（℃/小时）；保温段为 0 */
-  rateCPerHour: number
-  /** 保温段的基准保温时长（小时，按 5mm 壁厚计） */
-  holdHoursPer5mm: number
-  hint: string
-}
+/* ------------------------- 老库回退曲线（旧写死口径） ------------------------- */
 
-/** 退火曲线定义（钠钙玻璃常规退火区间） */
-export const ANNEAL_CURVE: Record<CurveSeg, CurveSegment> = {
-  升温: {
-    seg: '升温',
-    startC: 20,
-    endC: 560,
-    rateCPerHour: 120,
-    holdHoursPer5mm: 0,
-    hint: '从室温以 120 ℃/h 缓慢升温至 560 ℃ 退火点，避免热冲击。',
-  },
-  保温: {
-    seg: '保温',
-    startC: 560,
-    endC: 560,
-    rateCPerHour: 0,
-    holdHoursPer5mm: 1.2,
-    hint: '在 560 ℃ 退火点保温，每 5 mm 壁厚保温 1.2 小时以消除内应力。',
-  },
-  缓冷: {
-    seg: '缓冷',
-    startC: 560,
-    endC: 60,
-    rateCPerHour: 40,
-    holdHoursPer5mm: 0,
-    hint: '以 40 ℃/h 缓慢降温至 60 ℃ 以下再出窑，快速降温会造成裂纹。',
-  },
+/** 老库无卡版本时的兜底曲线参数（与升级前写死的钠钙玻璃参数一致） */
+export const LEGACY_CURVE: Record<CurveSeg, { startC: number; endC: number; rateCPerHour: number; holdHoursPer5mm: number; hint: string }> = {
+  升温: { startC: 20, endC: 560, rateCPerHour: 120, holdHoursPer5mm: 0, hint: '从室温以 120 ℃/h 缓慢升温至 560 ℃ 退火点，避免热冲击。' },
+  保温: { startC: 560, endC: 560, rateCPerHour: 0, holdHoursPer5mm: 1.2, hint: '在 560 ℃ 退火点保温，每 5 mm 壁厚保温 1.2 小时以消除内应力。' },
+  缓冷: { startC: 560, endC: 60, rateCPerHour: 40, holdHoursPer5mm: 0, hint: '以 40 ℃/h 缓慢降温至 60 ℃ 以下再出窑，快速降温会造成裂纹。' },
 }
 
 /**
- * 曲线段时长换算（小时）
- * 升温 / 缓冷按温差与速率换算；保温按壁厚换算（每 5 mm 保温 1.2 小时）。
+ * @deprecated 仅用于老库只读记录与升级前口径；新排产一律走工艺卡。
+ * 保留导出供旧界面提示文案使用。
  */
-export function segmentHours(seg: CurveSeg, wallThicknessMm: number): number {
-  const curve = ANNEAL_CURVE[seg]
+export const ANNEAL_CURVE = LEGACY_CURVE
+
+/* ------------------------------ 卡三段时长 ------------------------------ */
+
+/** 单段时长（小时）：升降温按温差/速率；保温取卡面保温时长 */
+export function cardSegmentHours(card: Pick<AnnealCard, 'curve'>, seg: CurveSeg): number {
+  const segment: CardSegment = card.curve[seg]
+  if (seg === '保温') return round1(Math.max(0, segment.holdHours))
+  const delta = Math.abs(segment.endC - segment.startC)
+  if (segment.rateCPerHour <= 0) return 0
+  return round1(delta / segment.rateCPerHour)
+}
+
+/** 一张卡的完整退火时长（三段合计，小时） */
+export function cardTotalHours(card: Pick<AnnealCard, 'curve'>): number {
+  return round1(
+    cardSegmentHours(card, '升温') + cardSegmentHours(card, '保温') + cardSegmentHours(card, '缓冷'),
+  )
+}
+
+/** 三段时长明细（小时） */
+export function cardSegmentHoursMap(card: Pick<AnnealCard, 'curve'>): Record<CurveSeg, number> {
+  return {
+    升温: cardSegmentHours(card, '升温'),
+    保温: cardSegmentHours(card, '保温'),
+    缓冷: cardSegmentHours(card, '缓冷'),
+  }
+}
+
+/**
+ * 老库口径段时长（按壁厚线性保温），仅供套不上卡的只读遗留排位使用。
+ */
+export function legacySegmentHours(seg: CurveSeg, wallThicknessMm: number): number {
+  const curve = LEGACY_CURVE[seg]
   if (seg === '保温') {
     const thickness = Math.max(1, wallThicknessMm)
     return round1((thickness / 5) * curve.holdHoursPer5mm)
@@ -83,11 +89,87 @@ export function segmentHours(seg: CurveSeg, wallThicknessMm: number): number {
   return round1(delta / curve.rateCPerHour)
 }
 
-/** 一件作品的完整退火时长（三段合计，小时） */
-export function totalAnnealHours(wallThicknessMm: number): number {
+/** 老库口径完整时长（按壁厚），仅遗留只读记录 / 无卡提示使用 */
+export function legacyTotalHours(wallThicknessMm: number): number {
   return round1(
-    segmentHours('升温', wallThicknessMm) + segmentHours('保温', wallThicknessMm) + segmentHours('缓冷', wallThicknessMm),
+    legacySegmentHours('升温', wallThicknessMm) +
+      legacySegmentHours('保温', wallThicknessMm) +
+      legacySegmentHours('缓冷', wallThicknessMm),
   )
+}
+
+/* ------------------------------ 挑卡 / 对账 ------------------------------ */
+
+/** 壁厚是否落在卡区间（含端点） */
+export function cardCoversThickness(card: Pick<AnnealCard, 'minMm' | 'maxMm'>, thicknessMm: number): boolean {
+  return thicknessMm >= card.minMm && thicknessMm <= card.maxMm
+}
+
+/** 从若干卡里挑出指定玻璃种类 + 壁厚命中的卡（不区分版本/状态） */
+export function matchCards(
+  cards: AnnealCard[],
+  glassType: GlassType,
+  thicknessMm: number,
+): AnnealCard[] {
+  return cards
+    .filter((card) => card.glassType === glassType && cardCoversThickness(card, thicknessMm))
+    .sort((a, b) => b.version - a.version)
+}
+
+/** 当前生效（active）卡列表 */
+export function activeCards(cards: AnnealCard[]): AnnealCard[] {
+  return cards.filter((card) => card.state === 'active')
+}
+
+/**
+ * 为作品挑当前应使用的生效卡：玻璃种类 + 壁厚命中，版本号最高者。
+ * 没有命中返回 null（排产时提示缺卡，需工艺技术组建卡）。
+ */
+export function pickActiveCard(
+  cards: AnnealCard[],
+  glassType: GlassType,
+  thicknessMm: number,
+): AnnealCard | null {
+  const hit = matchCards(activeCards(cards), glassType, thicknessMm)[0]
+  return hit ?? null
+}
+
+/** 老库升级：按壁厚在指定玻璃种类的「当时那版（v1，active）」里套卡 */
+export function pickLegacyCard(
+  cards: AnnealCard[],
+  glassType: GlassType,
+  thicknessMm: number,
+): AnnealCard | null {
+  const hit = activeCards(cards)
+    .filter((card) => card.glassType === glassType && card.version === 1 && cardCoversThickness(card, thicknessMm))
+    .sort((a, b) => b.version - a.version)[0]
+  return hit ?? null
+}
+
+/**
+ * 卡版本对账：排位冻结的卡版本是否仍是该卡系当前生效版本。
+ * - 找不到卡系或生效版本：视为对不上（待确认）；
+ * - 冻结版本 !== 当前生效版本：对不上（待确认）。
+ */
+export function isCardVersionCurrent(anneal: Pick<Anneal, 'cardKey' | 'cardVersion' | 'legacy'>, cards: AnnealCard[]): boolean {
+  if (anneal.legacy) return false
+  const current = activeCards(cards).find((card) => card.cardKey === anneal.cardKey)
+  if (current === undefined) return false
+  return current.version === anneal.cardVersion
+}
+
+/** 把卡系标识拼出来（同玻璃种类 + 壁厚档的稳定 key） */
+export function buildCardKey(glassType: GlassType, minMm: number, maxMm: number): string {
+  return `${glassType}::${round2(minMm)}-${round2(maxMm)}mm`
+}
+
+/** 生成一张空白三段曲线（供建卡表单初始化） */
+export function emptyCurve(seed?: Partial<CardCurve>): CardCurve {
+  return {
+    升温: { startC: 20, endC: 560, rateCPerHour: 120, holdHours: 0, ...seed?.升温 },
+    保温: { startC: 560, endC: 560, rateCPerHour: 0, holdHours: 1.2, ...seed?.保温 },
+    缓冷: { startC: 560, endC: 60, rateCPerHour: 40, holdHours: 0, ...seed?.缓冷 },
+  }
 }
 
 /** 把小时数格式化为「x 小时 y 分钟」 */
@@ -107,13 +189,24 @@ export function parseAt(value: string): number {
   return Number.isNaN(stamp) ? Number.NaN : stamp
 }
 
-/** 时间窗：[入窑, 出炉]；未出炉时以入窑 + 预计时长作为临时出炉时间 */
-export function annealWindow(row: Pick<Anneal, 'inAt' | 'outAt' | 'curveSeg'>, wallThicknessMm: number): [number, number] {
+/** 入窑时间 + 时长（小时）→ 预计出炉时间戳 */
+export function addHours(at: string, hours: number): number {
+  return parseAt(at) + hours * 3600 * 1000
+}
+
+/**
+ * 时间窗：[入窑, 出炉]；未出炉时以入窑 + 卡版本三段合计时长作为临时出炉时间。
+ * hoursOf 由调用方提供（按该排位冻结的卡版本取时长；遗留记录走老口径）。
+ */
+export function annealWindow(
+  row: Pick<Anneal, 'inAt' | 'outAt'>,
+  totalHours: number,
+): [number, number] {
   const start = parseAt(row.inAt)
   if (Number.isNaN(start)) return [Number.NaN, Number.NaN]
   const end = parseAt(row.outAt)
   if (!Number.isNaN(end) && end > start) return [start, end]
-  return [start, start + segmentHours(row.curveSeg, wallThicknessMm) * 3600 * 1000]
+  return [start, start + totalHours * 3600 * 1000]
 }
 
 /** 两个时间窗是否重叠 */
@@ -132,27 +225,30 @@ export interface SlotConflict {
 
 /**
  * 窑位占用判重：同一窑位、时间窗重叠即为冲突。
+ * 仅与「占着窑位」的排位比较（待排 / 待确认的不占窑位）。
+ * totalHoursOf 由调用方按各排位冻结的卡版本提供时长。
  * excludeAnnealId 用于编辑场景排除自身。
  */
 export function checkSlotConflict(
   existing: Anneal[],
-  candidate: Pick<Anneal, 'id' | 'kilnSlot' | 'inAt' | 'outAt' | 'curveSeg' | 'pieceId'>,
-  wallThicknessOf: (pieceId: string) => number,
+  candidate: Pick<Anneal, 'id' | 'kilnSlot' | 'inAt' | 'outAt' | 'pieceId'>,
+  totalHoursOf: (anneal: Pick<Anneal, 'pieceId'> & Partial<Pick<Anneal, 'cardVersionId'>>) => number,
   excludeAnnealId = '',
 ): SlotConflict {
-  const ownThickness = wallThicknessOf(candidate.pieceId)
-  const ownWindow = annealWindow(candidate, ownThickness)
+  const ownWindow = annealWindow(candidate, totalHoursOf(candidate))
 
   for (const row of existing) {
     if (row.id === excludeAnnealId) continue
-    if (row.kilnSlot !== candidate.kilnSlot) continue
-    const otherWindow = annealWindow(row, wallThicknessOf(row.pieceId))
+    if (row.kilnSlot === '' || row.kilnSlot !== candidate.kilnSlot) continue
+    // 待排 / 待确认的排位不占窑位，不参与冲突
+    if (row.scheduleState === '待排' || row.scheduleState === '待确认') continue
+    const otherWindow = annealWindow(row, totalHoursOf(row))
     if (windowsOverlap(ownWindow, otherWindow)) {
       return {
         conflict: true,
         withPieceId: row.pieceId,
         withAnnealId: row.id,
-        message: `窑位 ${candidate.kilnSlot} 在该时间窗内已被占用（${row.inAt} 起的 ${row.curveSeg} 段），请更换窑位或调整时间。`,
+        message: `窑位 ${candidate.kilnSlot} 在该时间窗内已被占用（${row.inAt} 起的排位），请更换窑位或调整入窑时间。`,
       }
     }
   }

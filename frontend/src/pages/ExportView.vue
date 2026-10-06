@@ -165,6 +165,7 @@ function handleExportCsv(): void {
     pieceStore.steps,
     annealStore.anneals,
     rows.value,
+    annealStore.cards,
   )
   ElMessage.success(`已导出窑务排产汇总 ${filename}`)
 }
@@ -221,7 +222,7 @@ const defectRows = computed<Inspect[]>(() => rows.value.filter((row) => row.resu
         :suffix="`· ${DB_NAME}`"
         tone="info"
         icon="Histogram"
-        hint="IndexedDB 库名与结构版本；v2 为 Piece 增加 craft 索引并回填默认值"
+        hint="IndexedDB 库名与结构版本；v3 新增退火工艺卡表，老排位按壁厚套当时那版卡，套不上的留只读"
       />
     </div>
 

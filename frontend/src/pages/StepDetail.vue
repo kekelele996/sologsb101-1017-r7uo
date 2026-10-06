@@ -13,14 +13,16 @@ import StageTag from '@/components/common/StageTag.vue'
 import { useStepProgress } from '@/hooks/useStepProgress'
 import { useFurnaceStore } from '@/stores/furnaceStore'
 import { usePieceStore } from '@/stores/pieceStore'
+import { useAnnealStore } from '@/stores/annealStore'
 import { STEP_NAME_OPTIONS, STEP_STATE_OPTIONS, type Step, type StepDraft, type StepName, type StepState } from '@/types/step'
 import { buildStepCardText, copyText } from '@/utils/export'
-import { CRAFT_TEMP_RANGE, checkStepTemp, formatHours, totalAnnealHours } from '@/utils/thermal'
+import { CRAFT_TEMP_RANGE, cardTotalHours, checkStepTemp, formatHours, legacyTotalHours } from '@/utils/thermal'
 
 const route = useRoute()
 const router = useRouter()
 const pieceStore = usePieceStore()
 const furnaceStore = useFurnaceStore()
+const annealStore = useAnnealStore()
 
 const pieceId = computed<string>(() => String(route.params.id ?? ''))
 const piece = computed(() => pieceStore.pieces.find((row) => row.id === pieceId.value) ?? null)
@@ -62,6 +64,18 @@ const furnace = computed(() =>
   batch.value === undefined ? undefined : furnaceStore.furnaces.find((row) => row.id === batch.value?.furnaceId)
 )
 
+/** 该作品当前命中的生效退火工艺卡 */
+const suggestedCard = computed(() => (piece.value === null ? null : annealStore.suggestedCard(piece.value.id)))
+const annealHours = computed(() => {
+  if (piece.value === null) return 0
+  const card = suggestedCard.value
+  return card === null ? legacyTotalHours(piece.value.wallThicknessMm) : cardTotalHours(card)
+})
+const cardLabel = computed(() => {
+  const card = suggestedCard.value
+  return card === null ? '未命中生效卡（按老口径估算）' : `${card.name} v${card.version}`
+})
+
 const tempCheck = computed(() =>
   piece.value === null
     ? { ok: true, message: '' }
@@ -73,6 +87,7 @@ const currentStep = computed<Step | null>(() => steps.value.find((row) => row.st
 onMounted(() => {
   void furnaceStore.loadAll()
   void pieceStore.loadAll()
+  void annealStore.loadAll()
 })
 
 function openCreate(): void {
@@ -158,7 +173,7 @@ async function handleDrop(targetId: string): Promise<void> {
 
 async function handleCopyCard(): Promise<void> {
   if (piece.value === null) return
-  const text = buildStepCardText(piece.value, batch.value, furnace.value, steps.value, [])
+  const text = buildStepCardText(piece.value, batch.value, furnace.value, steps.value, [], annealStore.cards)
   const ok = await copyText(text)
   ElMessage[ok ? 'success' : 'warning'](ok ? '工序卡片已复制到剪贴板' : '当前浏览器不支持剪贴板写入')
 }
@@ -185,7 +200,8 @@ function goAnnealing(): void {
           <StageTag v-if="piece" :stage="piece.state" :craft="piece.craft" />
           <el-tag v-if="furnace" type="info">{{ furnace.code }} · 上限 {{ furnace.maxTempC }} ℃</el-tag>
           <el-tag v-if="batch" type="success">{{ batch.colorCode }} · 余 {{ batch.remainKg }} kg</el-tag>
-          <el-tag v-if="piece" type="warning">理论退火 {{ formatHours(totalAnnealHours(piece.wallThicknessMm)) }}</el-tag>
+          <el-tag v-if="piece" type="warning">理论退火 {{ formatHours(annealHours) }}</el-tag>
+          <el-tag v-if="piece" type="primary" effect="plain">{{ cardLabel }}</el-tag>
         </el-space>
       </template>
     </el-page-header>
@@ -236,7 +252,7 @@ function goAnnealing(): void {
         :closable="false"
         class="mb-14"
         title="全部工序已完成，可以进入退火排位"
-        :description="`理论退火时长 ${formatHours(totalAnnealHours(piece?.wallThicknessMm ?? 4))}（升温 / 保温 / 缓冷三段合计）。`"
+        :description="`理论退火时长 ${formatHours(annealHours)}（${cardLabel}，升温 / 保温 / 缓冷三段合计）。`"
       />
 
       <el-card shadow="never">

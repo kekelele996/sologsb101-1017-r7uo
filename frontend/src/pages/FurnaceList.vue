@@ -22,6 +22,7 @@ import {
   type FurnaceType,
 } from '@/types/furnace'
 import type { GlassBatch, GlassBatchDraft } from '@/types/batch'
+import { GLASS_TYPE_OPTIONS } from '@/types/card'
 import { LOW_REMAIN_KG, isLowRemain } from '@/utils/thermal'
 import { today } from '@/utils/id'
 
@@ -52,6 +53,7 @@ const batchForm = reactive<GlassBatchDraft>({
   furnaceId: '',
   colorCode: '',
   recipe: '',
+  glassType: '钠钙玻璃',
   meltDate: today(),
   tempC: 1150,
   remainKg: 200,
@@ -69,6 +71,7 @@ const batchRules: FormRules<GlassBatchDraft> = {
   furnaceId: [{ required: true, message: '请选择所属窑炉', trigger: 'change' }],
   colorCode: [{ required: true, message: '请填写色号', trigger: 'blur' }],
   recipe: [{ required: true, message: '请填写配方', trigger: 'blur' }],
+  glassType: [{ required: true, message: '请选择玻璃种类', trigger: 'change' }],
   meltDate: [{ required: true, message: '请选择熔化日期', trigger: 'change' }],
   tempC: [{ required: true, message: '请填写出料温度', trigger: 'blur' }],
   remainKg: [{ required: true, message: '请填写剩余量', trigger: 'blur' }],
@@ -159,6 +162,7 @@ function openCreateBatch(): void {
     furnaceId: store.meltingFurnaces[0]?.id ?? store.furnaces[0]?.id ?? '',
     colorCode: '',
     recipe: '',
+    glassType: '钠钙玻璃' as GlassBatchDraft['glassType'],
     meltDate: today(),
     tempC: 1150,
     remainKg: 200,
@@ -172,6 +176,7 @@ function openEditBatch(row: GlassBatch): void {
     furnaceId: row.furnaceId,
     colorCode: row.colorCode,
     recipe: row.recipe,
+    glassType: row.glassType,
     meltDate: row.meltDate,
     tempC: row.tempC,
     remainKg: row.remainKg,
@@ -408,6 +413,11 @@ function handleFurnaceFilter(key: string, value: string): void {
         <el-table-column label="所属窑炉" min-width="170">
           <template #default="{ row }">{{ furnaceLabel[row.furnaceId] ?? '（窑炉已删除）' }}</template>
         </el-table-column>
+        <el-table-column label="玻璃种类" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ row.glassType }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="meltDate" label="熔化日期" width="120" />
         <el-table-column label="出料温度" width="110" align="right">
           <template #default="{ row }">{{ row.tempC }} ℃</template>
@@ -505,26 +515,31 @@ function handleFurnaceFilter(key: string, value: string): void {
             </el-form-item>
           </el-col>
           <el-col :span="12">
+            <el-form-item label="玻璃种类" prop="glassType">
+              <el-select v-model="batchForm.glassType" style="width: 100%">
+                <el-option v-for="item in GLASS_TYPE_OPTIONS" :key="item" :value="item" :label="item" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="12">
             <el-form-item label="熔化日期" prop="meltDate">
               <el-date-picker v-model="batchForm.meltDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="出料温度（℃）" prop="tempC">
+              <el-input-number v-model="batchForm.tempC" :min="600" :max="1800" :step="10" style="width: 100%" />
             </el-form-item>
           </el-col>
         </el-row>
         <el-form-item label="配方" prop="recipe">
           <el-input v-model="batchForm.recipe" type="textarea" :rows="2" placeholder="如：钠钙玻璃基础料 + 氧化钴 0.3%" />
         </el-form-item>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="出料温度（℃）" prop="tempC">
-              <el-input-number v-model="batchForm.tempC" :min="600" :max="1800" :step="10" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="剩余量（kg）" prop="remainKg">
-              <el-input-number v-model="batchForm.remainKg" :min="0" :max="5000" :step="10" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <el-form-item label="剩余量（kg）" prop="remainKg">
+          <el-input-number v-model="batchForm.remainKg" :min="0" :max="5000" :step="10" />
+        </el-form-item>
         <el-alert
           v-if="isLowRemain(batchForm.remainKg)"
           type="warning"

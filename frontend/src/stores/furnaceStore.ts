@@ -198,6 +198,7 @@ export const useFurnaceStore = defineStore('furnace', () => {
       furnaceId: draft.furnaceId,
       colorCode: draft.colorCode.trim() || '未命名色号',
       recipe: draft.recipe.trim(),
+      glassType: draft.glassType,
       meltDate: draft.meltDate,
       tempC: draft.tempC,
       remainKg: draft.remainKg,
